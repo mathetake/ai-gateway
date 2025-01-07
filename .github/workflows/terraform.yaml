@@ -9,7 +9,7 @@ on:
     branches:
       - main
     paths:
-      - '.github/terraform/**'
+      -  '.github/terraform/**'
 jobs:
   terraform:
     name: fmt - init - plan - apply
