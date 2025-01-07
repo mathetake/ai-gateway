@@ -9,10 +9,10 @@ on:
     branches:
       - main
     paths:
-      -  '.github/terraform/**'
+      - '.github/terraform/**'
 jobs:
   terraform:
-    name: fmt - init - plan - apply
+    name:  fmt - init - plan - apply
     runs-on: ubuntu-latest
     defaults:
       run:
