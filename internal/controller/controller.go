@@ -20,9 +20,14 @@ import (
 	aigv1a1 "github.com/envoyproxy/ai-gateway/api/v1alpha1"
 )
 
+func init() { MustInitializeScheme(scheme) }
+
+// scheme contains the necessary schemas for the AI Gateway.
 var scheme = runtime.NewScheme()
 
-func init() {
+// MustInitializeScheme initializes the scheme with the necessary schemas for the AI Gateway.
+// This is exported for the testing purposes.
+func MustInitializeScheme(scheme *runtime.Scheme) {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(aigv1a1.AddToScheme(scheme))
 	utilruntime.Must(apiextensionsv1.AddToScheme(scheme))
