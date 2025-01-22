@@ -15,7 +15,7 @@ a specific reason for not doing so.
 
 <!--
 Please provide a brief description of the changes in this PR.
-Example:
+Example: 
 
 This allows configuring extproc to listen on an Unix domain socket. Note that
 this commit just enables it in the extproc filter. Follow-up PRs will be
