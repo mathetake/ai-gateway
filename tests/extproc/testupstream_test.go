@@ -884,7 +884,7 @@ func checkModels(want openai.ModelList) func(t require.TestingT, body []byte) {
 
 func giantChatCompletionsRequestBody() string {
 	// This is a giant request body to test the streaming response handling.
-	// It contains 1000 messages, each with a simple text content.
+	// It contains 100 messages, each with a simple text content.
 	var sb strings.Builder
 	sb.WriteString(`{"model":"test-model","messages":[{"role":"system","content":"You are a chatbot."}`)
 	for i := 0; i < 100; i++ {
