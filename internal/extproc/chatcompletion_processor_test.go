@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"testing"
@@ -842,6 +843,183 @@ func Test_maybeMiddleOutCompressionImpl(t *testing.T) {
 				openai.ChatMessageRoleAssistant,
 			},
 		},
+		{
+			name: "compression triggered by 1000+ message limit despite low tokens",
+			messages: func() []openai.ChatCompletionMessageParamUnion {
+				// Create 1001 messages with very few tokens each
+				messages := make([]openai.ChatCompletionMessageParamUnion, 1001)
+				for i := 0; i < 1001; i++ {
+					if i%2 == 0 {
+						messages[i] = openai.ChatCompletionMessageParamUnion{
+							Type: openai.ChatMessageRoleUser,
+							Value: openai.ChatCompletionUserMessageParam{
+								Role:    openai.ChatMessageRoleUser,
+								Content: openai.StringOrUserRoleContentUnion{Value: fmt.Sprintf("user%d", i)},
+							},
+						}
+					} else {
+						messages[i] = openai.ChatCompletionMessageParamUnion{
+							Type: openai.ChatMessageRoleAssistant,
+							Value: openai.ChatCompletionAssistantMessageParam{
+								Role:    openai.ChatMessageRoleAssistant,
+								Content: openai.StringOrAssistantRoleContentUnion{Value: fmt.Sprintf("assistant%d", i)},
+							},
+						}
+					}
+				}
+				return messages
+			}(),
+			tokenCounts: func() map[string]int {
+				counts := make(map[string]int)
+				for i := 0; i < 1001; i++ {
+					if i%2 == 0 {
+						counts[fmt.Sprintf("user%d", i)] = 1
+					} else {
+						counts[fmt.Sprintf("assistant%d", i)] = 1
+					}
+				}
+				return counts
+			}(),
+			maximumContextLength: 10000, // High limit, but message count should trigger compression
+			expectedCompressed:   true,
+			expectedMessageCount: 999, // Should keep roughly half, only user messages can be skipped
+		},
+		{
+			name: "middle-out ordering verification - alternating selection",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user0"}, // index 0 - first (left)
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user1"}, // index 1
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user2"}, // index 2
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user3"}, // index 3
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user4"}, // index 4 - last (right)
+				}},
+			},
+			// Middle-out selection order: 0(left), 4(right), 1(left), 3(right), 2(left)
+			// With token limit of 80, first 4 messages (40 tokens) fit, 5th exceeds limit
+			tokenCounts:          map[string]int{"user0": 10, "user1": 10, "user2": 10, "user3": 10, "user4": 10},
+			maximumContextLength: 35, // Allow first 3-4 messages
+			expectedCompressed:   true,
+			expectedMessageCount: 3, // Should keep user0, user4, user1 (following middle-out order)
+			expectedMessageTypes: []string{openai.ChatMessageRoleUser, openai.ChatMessageRoleUser, openai.ChatMessageRoleUser},
+		},
+		{
+			name: "edge case - exactly at token limit with mixed message types",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleSystem, Value: openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.StringOrArray{Value: "system"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user1"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user2"},
+				}},
+			},
+			tokenCounts:          map[string]int{"system": 50, "user1": 25, "user2": 25}, // Total = 100
+			maximumContextLength: 100,                                                    // Exactly at limit
+			expectedCompressed:   false,                                                  // Should not compress when exactly at limit
+			expectedMessageCount: 3,
+		},
+		{
+			name: "edge case - exactly at token limit plus one",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleSystem, Value: openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.StringOrArray{Value: "system"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user1"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user2"},
+				}},
+			},
+			tokenCounts:          map[string]int{"system": 50, "user1": 25, "user2": 26}, // Total = 101
+			maximumContextLength: 100,                                                    // One over limit
+			expectedCompressed:   true,
+			expectedMessageCount: 2, // Should compress and skip one user message
+			expectedMessageTypes: []string{openai.ChatMessageRoleSystem, openai.ChatMessageRoleUser},
+		},
+		{
+			name: "all non-user messages over limit - no compression possible",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleSystem, Value: openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.StringOrArray{Value: "long system message"},
+				}},
+				{Type: openai.ChatMessageRoleAssistant, Value: openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "long assistant message"},
+				}},
+				{Type: openai.ChatMessageRoleTool, Value: openai.ChatCompletionToolMessageParam{
+					Role:       openai.ChatMessageRoleTool,
+					Content:    openai.StringOrArray{Value: "long tool response"},
+					ToolCallID: "tool-789",
+				}},
+			},
+			tokenCounts:          map[string]int{"long system message": 60, "long assistant message": 60, "long tool response": 60},
+			maximumContextLength: 100,   // Total = 180, over limit but no user messages to skip
+			expectedCompressed:   false, // Cannot compress since no user messages to skip
+			expectedMessageCount: 3,
+		},
+		{
+			name: "single user message exceeding limit",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "very long user message"},
+				}},
+			},
+			tokenCounts:          map[string]int{"very long user message": 200},
+			maximumContextLength: 100,
+			expectedCompressed:   true,
+			expectedMessageCount: 0, // Single user message gets skipped
+		},
+		{
+			name: "999 messages - just under 1000 limit, should not compress due to message count",
+			messages: func() []openai.ChatCompletionMessageParamUnion {
+				messages := make([]openai.ChatCompletionMessageParamUnion, 999)
+				for i := 0; i < 999; i++ {
+					messages[i] = openai.ChatCompletionMessageParamUnion{
+						Type: openai.ChatMessageRoleUser,
+						Value: openai.ChatCompletionUserMessageParam{
+							Role:    openai.ChatMessageRoleUser,
+							Content: openai.StringOrUserRoleContentUnion{Value: fmt.Sprintf("user%d", i)},
+						},
+					}
+				}
+				return messages
+			}(),
+			tokenCounts: func() map[string]int {
+				counts := make(map[string]int)
+				for i := 0; i < 999; i++ {
+					counts[fmt.Sprintf("user%d", i)] = 1 // Very low token count
+				}
+				return counts
+			}(),
+			maximumContextLength: 10000, // High limit
+			expectedCompressed:   false, // Should not compress due to message count being under 1000
+			expectedMessageCount: 999,
+		},
 	}
 
 	for _, tt := range tests {
@@ -866,6 +1044,67 @@ func Test_maybeMiddleOutCompressionImpl(t *testing.T) {
 				}
 				require.Equal(t, tt.expectedMessageTypes, actualTypes, "message types after compression mismatch")
 			}
+		})
+	}
+}
+
+func Test_maybeMiddleOutCompression(t *testing.T) {
+	tests := []struct {
+		name               string
+		model              string
+		messages           []openai.ChatCompletionMessageParamUnion
+		expectedCompressed bool
+	}{
+		{
+			name:  "test-model with compression needed",
+			model: "test-model", // This model has a context length of 20 tokens
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "This is a very long message that will exceed the 20 token limit for the test model"},
+				}},
+			},
+			expectedCompressed: true,
+		},
+		{
+			name:  "test-model with compression not needed",
+			model: "test-model",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "Short"},
+				}},
+			},
+			expectedCompressed: false,
+		},
+		{
+			name:  "unknown model with default 8192 context length",
+			model: "unknown-model",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "Short message"},
+				}},
+			},
+			expectedCompressed: false, // Should not compress with default 8192 token limit
+		},
+		{
+			name:               "empty messages array",
+			model:              "test-model",
+			messages:           []openai.ChatCompletionMessageParamUnion{},
+			expectedCompressed: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &openai.ChatCompletionRequest{
+				Model:    tt.model,
+				Messages: tt.messages,
+			}
+
+			compressed := maybeMiddleOutCompression(req, slog.Default())
+			require.Equal(t, tt.expectedCompressed, compressed, "compression result mismatch")
 		})
 	}
 }

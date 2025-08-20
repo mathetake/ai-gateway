@@ -717,22 +717,23 @@ func maybeMiddleOutCompressionImpl(req *openai.ChatCompletionRequest, tokenizerC
 		)
 	}
 
-	if totalTokens < maximumContextLength &&
-		// From OpenRouter code:
-		// > In some cases, the issue is not the token context length, but the actual number of messages.
-		// > The transform addresses this as well: For instance, Anthropic’s Claude models enforce a maximum
-		// > of 1000 messages. When this limit is exceeded with middle-out enabled, the transform will keep half
-		// > of the messages from the start and half from the end of the conversation.
-		//
-		// If total number of message is larger than 1000, we unconditionally perform the middle-out compression.
-		len(req.Messages) < 1000 {
+	// From OpenRouter code:
+	// > In some cases, the issue is not the token context length, but the actual number of messages.
+	// > The transform addresses this as well: For instance, Anthropic’s Claude models enforce a maximum
+	// > of 1000 messages. When this limit is exceeded with middle-out enabled, the transform will keep half
+	// > of the messages from the start and half from the end of the conversation.
+	//
+	// If total number of message is larger than 1000, we unconditionally perform the middle-out compression.
+	const maximumMessages = 1000
+	if totalTokens < maximumContextLength && len(req.Messages) < maximumMessages {
 		return false
 	}
 
 	// Do the *very naive* middle-out compression.
 	// Take the first and end of the messages alternately until we reach the maximum context length.
 	skipMessageIndexes := map[int]struct{}{}
-	count := 0
+	currentTokens := 0
+	currentMessages := 0
 	for left, right, takeLeft := 0, len(req.Messages)-1, true; left <= right; {
 		var i int
 		if takeLeft {
@@ -744,16 +745,18 @@ func maybeMiddleOutCompressionImpl(req *openai.ChatCompletionRequest, tokenizerC
 		}
 		takeLeft = !takeLeft
 		msg := &req.Messages[i]
-		count += tokens[i]
+		currentTokens += tokens[i]
+		skipped := false
 		switch msg.Type {
 		case openai.ChatMessageRoleUser:
-			if count > maximumContextLength {
+			if currentTokens > maximumContextLength {
 				// If the total token count exceeds the maximum context length, we skip this message.
 				skipMessageIndexes[i] = struct{}{}
 				l.Info("skipping user message for middle-out compression",
 					slog.Int("message_index", i),
 					slog.Int("tokens", tokens[i]),
 				)
+				skipped = true
 			}
 		case openai.ChatMessageRoleAssistant,
 			openai.ChatMessageRoleSystem,
@@ -763,6 +766,13 @@ func maybeMiddleOutCompressionImpl(req *openai.ChatCompletionRequest, tokenizerC
 			// We shouldn't skip any non-user messages, so we skip them.
 		default:
 			panic(fmt.Sprintf("unknown message type: %s", msg.Type))
+		}
+
+		if !skipped {
+			currentMessages++
+		}
+		if currentMessages >= maximumMessages {
+			skipMessageIndexes[i] = struct{}{}
 		}
 	}
 	if len(skipMessageIndexes) == 0 {
