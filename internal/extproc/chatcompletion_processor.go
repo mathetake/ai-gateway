@@ -19,6 +19,7 @@ import (
 	extprocv3http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/tidwall/sjson"
+	"github.com/tiktoken-go/tokenizer"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/envoyproxy/ai-gateway/filterapi"
@@ -235,6 +236,15 @@ func (c *chatCompletionProcessorUpstreamFilter) ProcessRequestHeaders(ctx contex
 	// * The request is a streaming request, and the IncludeUsage option is set to false since we need to ensure that
 	//	the token usage is calculated correctly without being bypassed.
 	forceBodyMutation := c.onRetry || c.forcedStreamOptionIncludeUsage
+	if maybeMiddleOutCompression(c.originalRequestBody, c.logger) {
+		forceBodyMutation = true
+		// TODO: marshaling the OpenAI request body lacks a lot of tests and buggy at the moment.
+		c.originalRequestBodyRaw, err = json.Marshal(c.originalRequestBody)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal request body: %w", err)
+		}
+	}
+
 	headerMutation, bodyMutation, err := c.translator.RequestBody(c.originalRequestBodyRaw, c.originalRequestBody, forceBodyMutation)
 	if err != nil {
 		return nil, fmt.Errorf("failed to transform request: %w", err)
@@ -543,4 +553,230 @@ func buildDynamicMetadata(config *processorConfig, costs *translator.LLMTokenUsa
 			},
 		},
 	}, nil
+}
+
+func maybeMiddleOutCompression(req *openai.ChatCompletionRequest, l *slog.Logger) bool {
+	// Calculate if the request body contains enough tokens to warrant middle-out compression.
+	// For example, each model has a maximum context length in the unit of tokens, and to calculate the number of tokens,
+	// we need "tokenizer". One way is to use,
+	// * https://github.com/openai/tiktoken.
+	// * https://github.com/tiktoken-go/tokenizer
+	tokenizerCodec, err := tokenizer.Get(tokenizer.Cl100kBase)
+	if err != nil {
+		panic(err)
+	}
+
+	maximumContextLength := 0
+	switch req.Model {
+	// TODO: list whatever known models we support here.
+	case "test-model":
+		maximumContextLength = 20 // For testing purpose.
+	default:
+		maximumContextLength = 8192 // Default to 8192 tokens for unknown models.
+	}
+	return maybeMiddleOutCompressionImpl(req, tokenizerCodec, maximumContextLength, l)
+}
+
+// maybeMiddleOutCompression conditionally performs the middle-out compression on the request body.
+//
+// https://openrouter.ai/docs/features/message-transforms
+func maybeMiddleOutCompressionImpl(req *openai.ChatCompletionRequest, tokenizerCodec tokenizer.Codec, maximumContextLength int, l *slog.Logger) bool {
+	tokens := make([]int, len(req.Messages))
+	totalTokens := 0
+	for i := range req.Messages {
+		msg := &req.Messages[i]
+		switch msg.Type {
+		case openai.ChatMessageRoleUser:
+			message := msg.Value.(openai.ChatCompletionUserMessageParam)
+			switch contentValue := message.Content.Value.(type) {
+			case string:
+				if contentValue != "" {
+					var ids []uint
+					ids, _, err := tokenizerCodec.Encode(contentValue)
+					if err != nil {
+						panic(err)
+					}
+					tokens[i] = len(ids)
+				}
+			case []openai.ChatCompletionContentPartUserUnionParam:
+				for _, content := range contentValue {
+					if content.TextContent != nil {
+						if content.TextContent.Text != "" {
+							var ids []uint
+							ids, _, err := tokenizerCodec.Encode(content.TextContent.Text)
+							if err != nil {
+								panic(err)
+							}
+							tokens[i] += len(ids)
+						}
+					}
+				}
+			}
+		case openai.ChatMessageRoleAssistant:
+			// Count assistant message tokens (string, structured, or array parts) generically.
+			message := msg.Value.(openai.ChatCompletionAssistantMessageParam)
+			switch v := message.Content.Value.(type) {
+			case string:
+				ids, _, err := tokenizerCodec.Encode(v)
+				if err != nil {
+					panic(err)
+				}
+				tokens[i] = len(ids)
+			case []openai.ChatCompletionAssistantMessageParamContent:
+				for _, contPart := range v {
+					switch contPart.Type {
+					case openai.ChatCompletionAssistantMessageParamContentTypeText:
+						if contPart.Text != nil {
+							ids, _, err := tokenizerCodec.Encode(*contPart.Text)
+							if err != nil {
+								panic(err)
+							}
+							tokens[i] += len(ids)
+						}
+					case openai.ChatCompletionAssistantMessageParamContentTypeRefusal:
+						if contPart.Refusal != nil {
+							ids, _, err := tokenizerCodec.Encode(*contPart.Refusal)
+							if err != nil {
+								panic(err)
+							}
+							tokens[i] += len(ids)
+						}
+					default:
+						// For any other content type, we treat it as a string and encode it.
+					}
+				}
+			}
+		case openai.ChatMessageRoleSystem:
+			systemMessage := msg.Value.(openai.ChatCompletionSystemMessageParam)
+			if v, ok := systemMessage.Content.Value.(string); ok {
+				ids, _, err := tokenizerCodec.Encode(v)
+				if err != nil {
+					panic(err)
+				}
+				tokens[i] = len(ids)
+			} else if contents, ok := systemMessage.Content.Value.([]openai.ChatCompletionContentPartTextParam); ok {
+				for j := range contents {
+					contentPart := &contents[j]
+					textContentPart := contentPart.Text
+					ids, _, err := tokenizerCodec.Encode(textContentPart)
+					if err != nil {
+						panic(err)
+					}
+					tokens[i] += len(ids)
+				}
+			}
+		case openai.ChatMessageRoleDeveloper:
+			developerMessage := msg.Value.(openai.ChatCompletionDeveloperMessageParam)
+			if v, ok := developerMessage.Content.Value.(string); ok {
+				ids, _, err := tokenizerCodec.Encode(v)
+				if err != nil {
+					panic(err)
+				}
+				tokens[i] = len(ids)
+			} else if contents, ok := developerMessage.Content.Value.([]openai.ChatCompletionContentPartTextParam); ok {
+				for j := range contents {
+					contentPart := &contents[j]
+					textContentPart := contentPart.Text
+					ids, _, err := tokenizerCodec.Encode(textContentPart)
+					if err != nil {
+						panic(err)
+					}
+					tokens[i] += len(ids)
+				}
+			}
+		case openai.ChatMessageRoleTool:
+			toolMessage := msg.Value.(openai.ChatCompletionToolMessageParam)
+			if v, ok := toolMessage.Content.Value.(string); ok {
+				ids, _, err := tokenizerCodec.Encode(v)
+				if err != nil {
+					panic(err)
+				}
+				tokens[i] = len(ids)
+			} else if contents, ok := toolMessage.Content.Value.([]openai.ChatCompletionContentPartTextParam); ok {
+				for j := range contents {
+					contentPart := &contents[j]
+					textContentPart := contentPart.Text
+					ids, _, err := tokenizerCodec.Encode(textContentPart)
+					if err != nil {
+						panic(err)
+					}
+					tokens[i] += len(ids)
+				}
+			}
+		case openai.ChatMessageRoleFunction:
+			// TODO What to do?
+		default:
+			panic(fmt.Sprintf("unknown message type: %s", msg.Type))
+		}
+
+		totalTokens += tokens[i]
+		l.Debug("message token count",
+			slog.Int("message_index", i),
+			slog.Int("tokens", tokens[i]),
+			slog.String("message_type", msg.Type),
+		)
+	}
+
+	if totalTokens < maximumContextLength &&
+		// From OpenRouter code:
+		// > In some cases, the issue is not the token context length, but the actual number of messages.
+		// > The transform addresses this as well: For instance, Anthropic’s Claude models enforce a maximum
+		// > of 1000 messages. When this limit is exceeded with middle-out enabled, the transform will keep half
+		// > of the messages from the start and half from the end of the conversation.
+		//
+		// If total number of message is larger than 1000, we unconditionally perform the middle-out compression.
+		len(req.Messages) < 1000 {
+		return false
+	}
+
+	// Do the *very naive* middle-out compression.
+	// Take the first and end of the messages alternately until we reach the maximum context length.
+	skipMessageIndexes := map[int]struct{}{}
+	count := 0
+	for left, right, takeLeft := 0, len(req.Messages)-1, true; left <= right; {
+		var i int
+		if takeLeft {
+			i = left
+			left++
+		} else {
+			i = right
+			right--
+		}
+		takeLeft = !takeLeft
+		msg := &req.Messages[i]
+		count += tokens[i]
+		switch msg.Type {
+		case openai.ChatMessageRoleUser:
+			if count > maximumContextLength {
+				// If the total token count exceeds the maximum context length, we skip this message.
+				skipMessageIndexes[i] = struct{}{}
+				l.Info("skipping user message for middle-out compression",
+					slog.Int("message_index", i),
+					slog.Int("tokens", tokens[i]),
+				)
+			}
+		case openai.ChatMessageRoleAssistant,
+			openai.ChatMessageRoleSystem,
+			openai.ChatMessageRoleDeveloper,
+			openai.ChatMessageRoleTool,
+			openai.ChatMessageRoleFunction:
+			// We shouldn't skip any non-user messages, so we skip them.
+		default:
+			panic(fmt.Sprintf("unknown message type: %s", msg.Type))
+		}
+	}
+	if len(skipMessageIndexes) == 0 {
+		// We no message can be skipped, so do the early return.
+		return false
+	}
+
+	messages := make([]openai.ChatCompletionMessageParamUnion, 0, len(req.Messages)-len(skipMessageIndexes))
+	for i := 0; i < len(req.Messages); i++ {
+		if _, ok := skipMessageIndexes[i]; ok {
+			continue // Skip this message.
+		}
+		messages = append(messages, req.Messages[i])
+	}
+	req.Messages = messages
+	return true
 }

@@ -703,6 +703,17 @@ data: {"type": "message_stop"}
 
 `,
 		},
+		{
+			name:           "middle out",
+			backend:        "openai",
+			path:           "/v1/chat/completions",
+			method:         http.MethodPost,
+			requestBody:    giantChatCompletionsRequestBody(),
+			expRequestBody: `{"messages":[{"content":"You are a chatbot.","role":"system"},{"content":"Message 1","role":"user"},{"content":"Message 2","role":"user"},{"content":"Message 99","role":"user"},{"content":"Message 100","role":"user"},{"content":"AAAAAAAAAAAA","role":"system"}],"model":"test-model"}`,
+			expPath:        "/v1/chat/completions",
+			responseBody:   `{"choices":[{"message":{"content":"This is a test."}}]}`,
+			expStatus:      http.StatusOK,
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Eventually(t, func() bool {
@@ -869,4 +880,18 @@ func checkModels(want openai.ModelList) func(t require.TestingT, body []byte) {
 		require.Len(t, models.Data, len(want.Data))
 		require.Equal(t, want, models)
 	}
+}
+
+func giantChatCompletionsRequestBody() string {
+	// This is a giant request body to test the streaming response handling.
+	// It contains 1000 messages, each with a simple text content.
+	var sb strings.Builder
+	sb.WriteString(`{"model":"test-model","messages":[{"role":"system","content":"You are a chatbot."}`)
+	for i := 0; i < 100; i++ {
+		sb.WriteString(fmt.Sprintf(`,{"role":"user","content":"Message %d"}`, i+1))
+	}
+	sb.WriteString(fmt.Sprintf(`,{"role":"system","content":"AAAAAAAAAAAA"}`))
+	sb.WriteString("]}")
+	ret := sb.String()
+	return ret
 }

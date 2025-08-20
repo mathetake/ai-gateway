@@ -17,7 +17,9 @@ import (
 	extprocv3http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	"github.com/stretchr/testify/require"
+	"github.com/tiktoken-go/tokenizer"
 	"google.golang.org/protobuf/types/known/structpb"
+	"k8s.io/utils/ptr"
 
 	"github.com/envoyproxy/ai-gateway/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
@@ -596,4 +598,274 @@ func TestChatCompletionProcessorRouterFilter_ProcessResponseBody_SpanHandling(t 
 		require.Equal(t, 500, span.ErrorStatus)
 		require.Equal(t, errorBody, span.ErrBody)
 	})
+}
+
+// mockTokenizer is a mock implementation of the tokenizer.Codec interface.
+type mockTokenizer struct {
+	tokenizer.Codec
+	tokens map[string]int
+}
+
+// Encode overrides [tokenizer.Codec.Encode] method for the mock tokenizer.
+func (m *mockTokenizer) Encode(text string) ([]uint, []string, error) {
+	if count, ok := m.tokens[text]; ok {
+		return make([]uint, count), make([]string, count), nil
+	}
+	return nil, nil, errors.New("text not found in mock tokenizer")
+}
+
+func Test_maybeMiddleOutCompressionImpl(t *testing.T) {
+	tests := []struct {
+		name                 string
+		messages             []openai.ChatCompletionMessageParamUnion
+		tokenCounts          map[string]int
+		maximumContextLength int
+		expectedCompressed   bool
+		expectedMessageCount int
+		expectedMessageTypes []string
+	}{
+		{
+			name: "no compression needed - under token limit and message count",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleSystem, Value: openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.StringOrArray{Value: "system message"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user message"},
+				}},
+				{Type: openai.ChatMessageRoleAssistant, Value: openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "assistant message"},
+				}},
+			},
+			tokenCounts:          map[string]int{"system message": 10, "user message": 10, "assistant message": 10},
+			maximumContextLength: 100,
+			expectedCompressed:   false,
+			expectedMessageCount: 3,
+		},
+		{
+			name: "compression needed - over token limit",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleSystem, Value: openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.StringOrArray{Value: "system message"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user1"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user2"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user3"},
+				}},
+				{Type: openai.ChatMessageRoleAssistant, Value: openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "assistant message"},
+				}},
+			},
+			tokenCounts:          map[string]int{"system message": 30, "user1": 30, "user2": 30, "user3": 30, "assistant message": 30},
+			maximumContextLength: 100,
+			expectedCompressed:   true,
+			expectedMessageCount: 3,
+			expectedMessageTypes: []string{
+				openai.ChatMessageRoleSystem,
+				openai.ChatMessageRoleUser,
+				openai.ChatMessageRoleAssistant,
+			},
+		},
+		{
+			name: "user message with array content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role: openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: []openai.ChatCompletionContentPartUserUnionParam{
+						{TextContent: &openai.ChatCompletionContentPartTextParam{Type: string(openai.ChatCompletionContentPartTextTypeText), Text: "text1"}},
+						{TextContent: &openai.ChatCompletionContentPartTextParam{Type: string(openai.ChatCompletionContentPartTextTypeText), Text: "text2"}},
+					}},
+				}},
+			},
+			tokenCounts:          map[string]int{"text1": 50, "text2": 60},
+			maximumContextLength: 100,
+			expectedCompressed:   true,
+			expectedMessageCount: 0,
+		},
+		{
+			name: "assistant message with array content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleAssistant, Value: openai.ChatCompletionAssistantMessageParam{
+					Role: openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: []openai.ChatCompletionAssistantMessageParamContent{
+						{Type: openai.ChatCompletionAssistantMessageParamContentTypeText, Text: ptr.To("assistant text")},
+						{Type: openai.ChatCompletionAssistantMessageParamContentTypeRefusal, Refusal: ptr.To("refusal text")},
+					}},
+				}},
+			},
+			tokenCounts:          map[string]int{"assistant text": 30, "refusal text": 30},
+			maximumContextLength: 100,
+			expectedCompressed:   false,
+			expectedMessageCount: 1, // Assistant message should be kept.
+		},
+		{
+			name: "system message with array content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleSystem, Value: openai.ChatCompletionSystemMessageParam{
+					Role: openai.ChatMessageRoleSystem,
+					Content: openai.StringOrArray{Value: []openai.ChatCompletionContentPartTextParam{
+						{Text: "system text 1"},
+						{Text: "system text 2"},
+					}},
+				}},
+			},
+			tokenCounts:          map[string]int{"system text 1": 25, "system text 2": 25},
+			maximumContextLength: 100,
+			expectedCompressed:   false,
+			expectedMessageCount: 1, // System message should be kept.
+		},
+		{
+			name: "developer message with string content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleDeveloper, Value: openai.ChatCompletionDeveloperMessageParam{
+					Role:    openai.ChatMessageRoleDeveloper,
+					Content: openai.StringOrArray{Value: "developer message"},
+				}},
+			},
+			tokenCounts:          map[string]int{"developer message": 10000},
+			maximumContextLength: 100,
+			expectedCompressed:   false,
+			expectedMessageCount: 1, // Developer message should be kept.
+		},
+		{
+			name: "developer message with array content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleDeveloper, Value: openai.ChatCompletionDeveloperMessageParam{
+					Role: openai.ChatMessageRoleDeveloper,
+					Content: openai.StringOrArray{Value: []openai.ChatCompletionContentPartTextParam{
+						{Text: "dev text"},
+					}},
+				}},
+			},
+			tokenCounts:          map[string]int{"dev text": 10000},
+			maximumContextLength: 100,
+			expectedCompressed:   false,
+			expectedMessageCount: 1, // Developer message should be kept.
+		},
+		{
+			name: "tool message with string content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleTool, Value: openai.ChatCompletionToolMessageParam{
+					Role:       openai.ChatMessageRoleTool,
+					Content:    openai.StringOrArray{Value: "tool response"},
+					ToolCallID: "tool-123",
+				}},
+			},
+			tokenCounts:          map[string]int{"tool response": 10000},
+			maximumContextLength: 100,
+			expectedCompressed:   false,
+			expectedMessageCount: 1, // Tool message should be kept.
+		},
+		{
+			name: "tool message with array content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleTool, Value: openai.ChatCompletionToolMessageParam{
+					Role: openai.ChatMessageRoleTool,
+					Content: openai.StringOrArray{Value: []openai.ChatCompletionContentPartTextParam{
+						{Text: "tool text"},
+					}},
+					ToolCallID: "tool-456",
+				}},
+			},
+			tokenCounts:          map[string]int{"tool text": 10000},
+			maximumContextLength: 100,
+			expectedCompressed:   false,
+			expectedMessageCount: 1, // Tool message should be kept.
+		},
+		{
+			name: "empty string content",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: ""},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "non-empty"},
+				}},
+			},
+			tokenCounts:          map[string]int{"non-empty": 80},
+			maximumContextLength: 100,
+			expectedCompressed:   false,
+			expectedMessageCount: 2, // Below threshold, both messages kept.
+		},
+		{
+			name: "mixed message types with compression",
+			messages: []openai.ChatCompletionMessageParamUnion{
+				{Type: openai.ChatMessageRoleSystem, Value: openai.ChatCompletionSystemMessageParam{
+					Role:    openai.ChatMessageRoleSystem,
+					Content: openai.StringOrArray{Value: "system"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user1"},
+				}},
+				{Type: openai.ChatMessageRoleAssistant, Value: openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "assistant1"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user2"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "user3"},
+				}},
+				{Type: openai.ChatMessageRoleAssistant, Value: openai.ChatCompletionAssistantMessageParam{
+					Role:    openai.ChatMessageRoleAssistant,
+					Content: openai.StringOrAssistantRoleContentUnion{Value: "assistant2"},
+				}},
+			},
+			tokenCounts:          map[string]int{"system": 30, "user1": 30, "assistant1": 30, "user2": 30, "user3": 30, "assistant2": 30},
+			maximumContextLength: 120,
+			expectedCompressed:   true,
+			expectedMessageCount: 5,
+			expectedMessageTypes: []string{
+				openai.ChatMessageRoleSystem,
+				openai.ChatMessageRoleUser,
+				openai.ChatMessageRoleAssistant,
+				openai.ChatMessageRoleUser,
+				openai.ChatMessageRoleAssistant,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := &openai.ChatCompletionRequest{
+				Messages: tt.messages,
+			}
+
+			mockTokenizer := &mockTokenizer{
+				tokens: tt.tokenCounts,
+			}
+
+			compressed := maybeMiddleOutCompressionImpl(req, mockTokenizer, tt.maximumContextLength, slog.Default())
+
+			require.Equal(t, tt.expectedCompressed, compressed, "compression result mismatch")
+			require.Equal(t, tt.expectedMessageCount, len(req.Messages), "message count after compression mismatch")
+
+			if tt.expectedMessageTypes != nil {
+				actualTypes := make([]string, len(req.Messages))
+				for i, msg := range req.Messages {
+					actualTypes[i] = msg.Type
+				}
+				require.Equal(t, tt.expectedMessageTypes, actualTypes, "message types after compression mismatch")
+			}
+		})
+	}
 }
