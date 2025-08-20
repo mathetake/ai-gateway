@@ -730,7 +730,9 @@ func maybeMiddleOutCompressionImpl(req *openai.ChatCompletionRequest, tokenizerC
 	}
 
 	// Do the *very naive* middle-out compression.
-	// Take the first and end of the messages alternately until we reach the maximum context length.
+	// Take a messag from the front and end of the messages list alternately until we reach the maximum context length.
+	// For example, say we have a list of messages as [A, B, C, D, E] where 5 is the token per message, and have a
+	// maximum context length of 20. Then, this will remove C and the compressed slice is [A, B, D, E].
 	skipMessageIndexes := map[int]struct{}{}
 	currentTokens := 0
 	currentMessages := 0
@@ -763,7 +765,7 @@ func maybeMiddleOutCompressionImpl(req *openai.ChatCompletionRequest, tokenizerC
 			openai.ChatMessageRoleDeveloper,
 			openai.ChatMessageRoleTool,
 			openai.ChatMessageRoleFunction:
-			// We shouldn't skip any non-user messages, so we skip them.
+			// We shouldn't skip any non-user messages.
 		default:
 			panic(fmt.Sprintf("unknown message type: %s", msg.Type))
 		}

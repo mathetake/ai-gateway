@@ -17,6 +17,7 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3http "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/require"
 	"github.com/tiktoken-go/tokenizer"
 	"google.golang.org/protobuf/types/known/structpb"
@@ -1028,6 +1029,9 @@ func Test_maybeMiddleOutCompressionImpl(t *testing.T) {
 				Messages: tt.messages,
 			}
 
+			originalMessages := make([]openai.ChatCompletionMessageParamUnion, len(req.Messages))
+			copy(originalMessages, req.Messages)
+
 			mockTokenizer := &mockTokenizer{
 				tokens: tt.tokenCounts,
 			}
@@ -1043,6 +1047,10 @@ func Test_maybeMiddleOutCompressionImpl(t *testing.T) {
 					actualTypes[i] = msg.Type
 				}
 				require.Equal(t, tt.expectedMessageTypes, actualTypes, "message types after compression mismatch")
+			}
+
+			if tt.expectedCompressed {
+				fmt.Println(cmp.Diff(originalMessages, req.Messages))
 			}
 		})
 	}
@@ -1061,7 +1069,15 @@ func Test_maybeMiddleOutCompression(t *testing.T) {
 			messages: []openai.ChatCompletionMessageParamUnion{
 				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
 					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "foo"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
 					Content: openai.StringOrUserRoleContentUnion{Value: "This is a very long message that will exceed the 20 token limit for the test model This is a very long message that will exceed the 20 token limit for the test model This is a very long message that will exceed the 20 token limit for the test model"},
+				}},
+				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
+					Role:    openai.ChatMessageRoleUser,
+					Content: openai.StringOrUserRoleContentUnion{Value: "bar"},
 				}},
 			},
 			expectedCompressed: true,
@@ -1103,8 +1119,15 @@ func Test_maybeMiddleOutCompression(t *testing.T) {
 				Messages: tt.messages,
 			}
 
+			originalMessages := make([]openai.ChatCompletionMessageParamUnion, len(req.Messages))
+			copy(originalMessages, req.Messages)
+
 			compressed := maybeMiddleOutCompression(req, slog.Default())
 			require.Equal(t, tt.expectedCompressed, compressed, "compression result mismatch")
+
+			if tt.expectedCompressed {
+				fmt.Println(cmp.Diff(originalMessages, req.Messages))
+			}
 		})
 	}
 }
