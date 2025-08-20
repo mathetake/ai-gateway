@@ -7,7 +7,7 @@ Since the AI space moves quickly, Envoy AI Gateway targets a regular monthly rel
 Envoy AI Gateway is built on top of Envoy Gateway, so there is a notion of a "supported version" of Envoy Gateway that is compatible with Envoy AI Gateway.
 Usually, the main branch of Envoy AI Gateway is tested against both the latest stable version of Envoy Gateway and its main branch.
 However, Envoy AI Gateway may occasionally pick up critical new capabilities that are only available in the main branch of Envoy Gateway.
-In such cases, if a monthly release is based on an Envoy Gateway main commit (and not an upstream stable tagged release), the release notes will contain a clear WARNING stating this dependency.
+In such cases, if a monthly release is based on the Envoy Gateway main branch (and not a stable tagged release), our release notes will contain a clear WARNING stating this dependency.
 Envoy Gateway itself follows a roughly three month release cycle, so a "stable" Envoy AI Gateway release (i.e. one that is based on a tagged stable Envoy Gateway release) will be produced at least once every three months, aligned after (or shortly following) the corresponding Envoy Gateway stable release.
 
 ## Versioning
