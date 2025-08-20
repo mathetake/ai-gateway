@@ -1,10 +1,16 @@
 # Notes on Releases
 
-## Release Cycles
+## Cycles
 
-Since Envoy AI Gateway depends on the Envoy Gateway and Envoy Proxy, we will follow the release cycle of the Envoy Gateway.
+Since the AI space moves quickly, Envoy AI Gateway targets a regular monthly release cadence (at least one release per calendar month) cut from the main branch, depending on the feature set and stability of the main branch at the time of the release.
 
-In other words, we aim to cut the release of the Envoy AI Gateway a few days or a week after the new version of the Envoy Gateway is released. Therefore, the release cycle of the Envoy AI Gateway will be approximately every 2-3 months.
+Envoy AI Gateway is built on top of Envoy Gateway, so there is a notion of a "supported version" of Envoy Gateway that is compatible with Envoy AI Gateway.
+Usually, the main branch of Envoy AI Gateway is tested against both the latest stable version of Envoy Gateway and its main branch.
+However, Envoy AI Gateway may occasionally pick up critical new capabilities that are only available in the main branch of Envoy Gateway.
+In such cases, if a monthly release is based on the Envoy Gateway main branch (and not a stable tagged release), our release notes will contain a clear WARNING stating this dependency.
+Envoy Gateway itself follows a roughly three month release cycle, so a "stable" Envoy AI Gateway release (i.e. one that is based on a tagged stable Envoy Gateway release) will be produced at least once every three months, aligned after (or shortly following) the corresponding Envoy Gateway stable release.
+
+## Versioning
 
 We increment the major version number when we have a major architectural change or a major feature addition.
 
@@ -12,31 +18,48 @@ Especially when we have a first stable control plane API, we will cut the major 
 
 The patch version will be incremented when we have a bug fix or a security fix. The end of life for the version will be 2 releases after the release of the version. For example, if we release the version v0.1.0, the end of life for the version will be when we release the version v0.3.0.
 
-The main branch will always use the latest version of the Envoy Gateway, hence the latest version of the Envoy, and the main version will be available just like the tagged released versions in the Docker Hub where we also host the helm chart.
+## Release Artifacts
+
+We have two kinds of release artifacts for each version of Envoy AI Gateway:
+* Docker images for the controller as well as the extproc images.
+* Helm charts for deploying the controller in Kubernetes.
+
+Both artifacts are tagged with a release tag and published in the Docker Hub. For example, we have
+* `docker.io/envoyproxy/ai-gateway-extproc:v0.2.1`
+* `docker.io/envoyproxy/ai-gateway-controller:v0.2.1`
+* `docker.io/envoyproxy/ai-gateway-helm:v0.2.1`
+* `docker.io/envoyproxy/ai-gateway-crds-helm:v0.2.1`
+
+published in the Docker Hub.
+
+The main branch version of Envoy AI Gateway is also tagged just like the tagged released versions in the Docker Hub.
+More precisely, the main version's helm chart is tagged with `v0.0.0-${commit hash of the main branch}`.
+
+* `docker.io/envoyproxy/ai-gateway-extproc:${git_commit}`
+* `docker.io/envoyproxy/ai-gateway-controller:${git_commit}`
+* `docker.io/envoyproxy/ai-gateway-helm:v0.0.0-${git_commit}`
+* `docker.io/envoyproxy/ai-gateway-crds-helm:v0.0.0-${git_commit}`
 
 ## Support Policy
 
 This document focuses on compatibility concerns of those using Envoy AI Gateway.
 It is important to note that the support policy is subject to change at any time. The support policy is as follows:
 
-First of all, there are four areas of compatibility that we are concerned with:
-* [Using envoyproxy/ai-gateway as a Go package](#public-go-package).
+First, there are three areas of compatibility that we are concerned with:
 * [Deploying the Envoy AI Gateway controller through the Kubernetes Custom Resource Definition (CRD)](#Custom-Resource-Definitions).
 * [Upgrading the Envoy AI Gateway controller](#Upgrading-the-Envoy-AI-Gateway-controller).
 * [Envoy Gateway vs Envoy AI Gateway compatibility](#Envoy-Gateway-vs-Envoy-AI-Gateway-compatibility).
 
-### Public Go package
-
-Since we do not envision this repository ends up as a transitive dependency, i.e. only used as a direct dependency such as in a custom control plane, etc., we assume that any consumer of the project should have the full control over the source code depending on the project. This allows us to declare deprecation and introduce the breaking changes in the version after the next one since they can migrate the code at their discretion. For example, any public API that is marked as deprecated in the version N will be removed in the version N+2. We document how users should migrate to the new API will be documented in the release notes if applicable, but we do not guarantee that the migration path will be provided.
+Note: Since we do not envision users will consume this project as a library, except for CRD api/*/*.go files, we do not guarantee any compatibility for the Go public APIs exposed in this project.
 
 ### Custom Resource Definitions
 
 The Custom Resource Definitions (CRDs) are defined in api/${version}/*.go files. The CRDs are versioned as v1alpha1, v1alpha2, etc.
 
-**For alpha versions**, we simply employ the same deprecation policy as the Go package. In other words, the APIs will be marked as deprecated in the version N and will be removed in the version N+2 but without any guarantee of migration path.
-
+**For alpha versions**, the APIs will be marked as deprecated in the version N and will be removed in the version N+2.
 Migration paths for alpha versions will be the best effort and will be documented in the release notes.
-**For beta versions**, For beta versions, it is the same as the alpha versions, but we will provide a migration path in the release notes.
+
+**For beta versions**, For beta versions, it is the same as the alpha versions, but we guarantee that we provide a migration path in the release notes.
 
 **For stable versions**, we will never break the APIs unless there is a critical security issue.
 We will provide a migration path in the release notes in case we need to break the APIs.
