@@ -1061,7 +1061,7 @@ func Test_maybeMiddleOutCompression(t *testing.T) {
 			messages: []openai.ChatCompletionMessageParamUnion{
 				{Type: openai.ChatMessageRoleUser, Value: openai.ChatCompletionUserMessageParam{
 					Role:    openai.ChatMessageRoleUser,
-					Content: openai.StringOrUserRoleContentUnion{Value: "This is a very long message that will exceed the 20 token limit for the test model"},
+					Content: openai.StringOrUserRoleContentUnion{Value: "This is a very long message that will exceed the 20 token limit for the test model This is a very long message that will exceed the 20 token limit for the test model This is a very long message that will exceed the 20 token limit for the test model"},
 				}},
 			},
 			expectedCompressed: true,
