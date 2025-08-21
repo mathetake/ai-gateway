@@ -710,7 +710,7 @@ func maybeMiddleOutCompressionImpl(req *openai.ChatCompletionRequest, tokenizerC
 		}
 
 		totalTokens += tokens[i]
-		l.Debug("message token count",
+		l.Error("message token count", // Use Error for debugging purposes for now.
 			slog.Int("message_index", i),
 			slog.Int("tokens", tokens[i]),
 			slog.String("message_type", msg.Type),
@@ -754,7 +754,8 @@ func maybeMiddleOutCompressionImpl(req *openai.ChatCompletionRequest, tokenizerC
 			if currentTokens > maximumContextLength {
 				// If the total token count exceeds the maximum context length, we skip this message.
 				skipMessageIndexes[i] = struct{}{}
-				l.Info("skipping user message for middle-out compression",
+				// Use Error for debugging purposes for now.
+				l.Error("skipping user message for middle-out compression",
 					slog.Int("message_index", i),
 					slog.Int("tokens", tokens[i]),
 				)

@@ -83,9 +83,10 @@ metadata:
   namespace: default
 spec:
   endpoints:
-    - ip:
-        address: 0.0.0.0
-        # https://github.com/ollama/ollama/blob/main/docs/faq.md#how-can-i-expose-ollama-on-my-network
+    - fqdn:
+        # Use the public DNS that resolves to localhost for now to avoid a bug around
+        # localhost resolution as well as directly specifying the IP address.
+        hostname: fbi.com
         port: 11434
 ---
 apiVersion: aigateway.envoyproxy.io/v1alpha1
