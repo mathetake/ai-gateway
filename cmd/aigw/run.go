@@ -289,7 +289,7 @@ func (runCtx *runCmdContext) mustStartExtProc(
 	if runCtx.isDebug {
 		args = append(args, "--logLevel", "debug")
 	} else {
-		args = append(args, "--logLevel", "warn")
+		args = append(args, "--logLevel", "info")
 	}
 	go func() {
 		if err := mainlib.Main(ctx, args, os.Stderr); err != nil {
