@@ -38,6 +38,17 @@ func (f *upstreamFilter) RequestHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.Reque
 		return sdk.RequestHeadersStatusStopIteration
 	}
 	f.rf = (*routerFilter)(unsafe.Pointer(uintptr(rfPtr)))
+
+	backend, ok := e.GetUpstreamHostMetadataString(internalapi.AIGatewayFilterMetadataNamespace, internalapi.InternalMetadataBackendNameKey)
+	if !ok {
+		e.SendLocalReply(500, nil, []byte("backend name not found in upstream host metadata"))
+		return sdk.RequestHeadersStatusStopIteration
+	}
+	b, ok := f.rf.filterConfig().Backends[backend]
+	if !ok {
+		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("backend %s not found in filter config", backend)))
+		return sdk.RequestHeadersStatusStopIteration
+	}
 	return sdk.RequestHeadersStatusContinue
 }
 

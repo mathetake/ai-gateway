@@ -54,6 +54,8 @@ type EnvoyHTTPFilter interface {
 	SendLocalReply(statusCode uint32, headers [][2]string, body []byte)
 	// GetDynamicMetadataString gets the dynamic metadata value for the given namespace and key. Returns the value and true if the value is found.
 	GetDynamicMetadataString(namespace string, key string) (string, bool)
+	// GetUpstreamHostMetadataString gets the upstream host metadata value for the given namespace and key. Returns the value and true if the value is found.
+	GetUpstreamHostMetadataString(namespace string, key string) (string, bool)
 	// SetDynamicMetadataString sets the dynamic metadata value for the given namespace and key. Returns true if the value is set successfully.
 	SetDynamicMetadataString(namespace string, key string, value string) bool
 }

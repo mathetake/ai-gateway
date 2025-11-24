@@ -551,8 +551,25 @@ func (e envoyFilter) GetResponseBody() (io.Reader, bool) {
 	return &bodyReader{chunks: chunks}, true
 }
 
+// https://github.com/envoyproxy/envoy/blob/dc2d3098ae5641555f15c71d5bb5ce0060a8015c/source/extensions/dynamic_modules/abi.h#L271-L282
+type metadataSource uint32
+
+const (
+	metadataSourceDynamic      metadataSource = 0
+	metadataSourceUpstreamHost metadataSource = 3
+)
+
 // GetDynamicMetadataString implements [EnvoyHTTPFilter].
 func (e envoyFilter) GetDynamicMetadataString(namespace string, key string) (string, bool) {
+	return e.getMetadataString(namespace, key, metadataSourceDynamic)
+}
+
+// GetUpstreamHostMetadataString implements [EnvoyHTTPFilter].
+func (e envoyFilter) GetUpstreamHostMetadataString(namespace string, key string) (string, bool) {
+	return e.getMetadataString(namespace, key, metadataSourceUpstreamHost)
+}
+
+func (e envoyFilter) getMetadataString(namespace string, key string, source metadataSource) (string, bool) {
 	namespacePtr := uintptr(unsafe.Pointer(unsafe.StringData(namespace)))
 	keyPtr := uintptr(unsafe.Pointer(unsafe.StringData(key)))
 	var resultBufferPtr *byte
@@ -560,8 +577,7 @@ func (e envoyFilter) GetDynamicMetadataString(namespace string, key string) (str
 
 	ret := C.envoy_dynamic_module_callback_http_get_metadata_string(
 		C.uintptr_t(e.raw),
-		// https://github.com/envoyproxy/envoy/blob/dc2d3098ae5641555f15c71d5bb5ce0060a8015c/source/extensions/dynamic_modules/abi.h#L273
-		C.uint32_t(0), // source
+		C.uint32_t(source),
 		C.uintptr_t(namespacePtr),
 		C.size_t(len(namespace)),
 		C.uintptr_t(keyPtr),

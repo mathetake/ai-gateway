@@ -11,6 +11,7 @@ import (
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/dynamic_module/sdk"
+	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	openaisdk "github.com/openai/openai-go/v2"
 )
@@ -33,8 +34,6 @@ type (
 		originalRequestBody    interface{}
 		originalRequestBodyRaw []byte
 	}
-
-	requestBodyParserFn func(body []byte) (parsed interface{}, modelName string, err error)
 )
 
 func newRouterFilterConfig(fcr *filterConfigReceiverImpl) *routerFilterConfig {
@@ -57,6 +56,11 @@ func newRouterFilterConfig(fcr *filterConfigReceiverImpl) *routerFilterConfig {
 // NewFilter implements [sdk.HTTPFilterConfig].
 func (f *routerFilterConfig) NewFilter() sdk.HTTPFilter {
 	return &routerFilter{fc: f}
+}
+
+// filterConfig is a helper that returns the filter config for the current stream.
+func (f *routerFilter) filterConfig() *filterapi.RuntimeConfig {
+	return f.fc.fcr.fc
 }
 
 // RequestHeaders implements [sdk.HTTPFilter].
@@ -110,24 +114,24 @@ func (f *routerFilter) RequestBody(e sdk.EnvoyHTTPFilter, endOfStream bool) sdk.
 		return sdk.RequestBodyStatusStopIterationAndBuffer
 	}
 	f.originalRequestBodyRaw = raw
-	var parserFn requestBodyParserFn
+	var parsed any
+	var modelName string
 	switch f.endpoint {
 	case chatCompletionsEndpoint:
-		parserFn = chatCompletionsBodyParser
+		parsed, modelName, err = modelBodyParser(raw, func(req *openai.ChatCompletionRequest) string { return req.Model })
 	case completionsEndpoint:
-		parserFn = completionsBodyParser
+		parsed, modelName, err = modelBodyParser(raw, func(req *openai.CompletionRequest) string { return req.Model })
 	case embeddingsEndpoint:
-		parserFn = embeddingsBodyParser
+		parsed, modelName, err = modelBodyParser(raw, func(req *openai.EmbeddingRequest) string { return req.Model })
 	case imagesGenerationsEndpoint:
-		parserFn = imagesGenerationsBodyParser
+		parsed, modelName, err = modelBodyParser(raw, func(req *openaisdk.ImageGenerateParams) string { return req.Model })
 	case rerankEndpoint:
-		parserFn = rerankBodyParser
+		parsed, modelName, err = modelBodyParser(raw, func(req *cohereschema.RerankV2Request) string { return req.Model })
 	case messagesEndpoint:
-		parserFn = messagesBodyParser
+		parsed, modelName, err = modelBodyParser(raw, func(req *anthropic.MessagesRequest) string { return req.GetModel() })
 	default:
 		e.SendLocalReply(500, nil, []byte("BUG: unsupported endpoint at body parsing: "+fmt.Sprintf("%d", f.endpoint)))
 	}
-	parsed, modelName, err := parserFn(raw)
 	if err != nil {
 		e.SendLocalReply(400, nil, []byte("failed to parse request body: "+err.Error()))
 		return sdk.RequestBodyStatusStopIterationAndBuffer
@@ -164,50 +168,10 @@ func (f *routerFilter) handleModelsEndpoint(e sdk.EnvoyHTTPFilter) sdk.RequestHe
 	return sdk.RequestHeadersStatusStopIteration
 }
 
-func chatCompletionsBodyParser(body []byte) (interface{}, string, error) {
-	var req openai.ChatCompletionRequest
+func modelBodyParser[T any](body []byte, modelExtractFn func(req *T) string) (interface{}, string, error) {
+	var req T
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, "", fmt.Errorf("failed to unmarshal body: %w", err)
 	}
-	return req, req.Model, nil
-}
-
-func completionsBodyParser(body []byte) (interface{}, string, error) {
-	var req openai.CompletionRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal body: %w", err)
-	}
-	return req, req.Model, nil
-}
-
-func embeddingsBodyParser(body []byte) (interface{}, string, error) {
-	var req openai.EmbeddingRequest
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal body: %w", err)
-	}
-	return req, req.Model, nil
-}
-
-func imagesGenerationsBodyParser(body []byte) (interface{}, string, error) {
-	var req openaisdk.ImageGenerateParams
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal body: %w", err)
-	}
-	return req, req.Model, nil
-}
-
-func rerankBodyParser(body []byte) (interface{}, string, error) {
-	var req cohereschema.RerankV2Request
-	if err := json.Unmarshal(body, &req); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal body: %w", err)
-	}
-	return req, req.Model, nil
-}
-
-func messagesBodyParser(body []byte) (interface{}, string, error) {
-	var anthropicReq anthropic.MessagesRequest
-	if err := json.Unmarshal(body, &anthropicReq); err != nil {
-		return nil, "", fmt.Errorf("failed to unmarshal body: %w", err)
-	}
-	return anthropicReq, anthropicReq.GetModel(), nil
+	return req, modelExtractFn(&req), nil
 }
