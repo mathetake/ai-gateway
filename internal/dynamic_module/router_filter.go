@@ -31,8 +31,10 @@ type (
 	routerFilter struct {
 		fc                     *routerFilterConfig
 		endpoint               endpoint
+		originalHeaders        map[string]string
 		originalRequestBody    interface{}
 		originalRequestBodyRaw []byte
+		attemptCount           int
 	}
 )
 
@@ -118,17 +120,17 @@ func (f *routerFilter) RequestBody(e sdk.EnvoyHTTPFilter, endOfStream bool) sdk.
 	var modelName string
 	switch f.endpoint {
 	case chatCompletionsEndpoint:
-		parsed, modelName, err = modelBodyParser(raw, func(req *openai.ChatCompletionRequest) string { return req.Model })
+		parsed, modelName, err = parseBodyWithModel(raw, func(req *openai.ChatCompletionRequest) string { return req.Model })
 	case completionsEndpoint:
-		parsed, modelName, err = modelBodyParser(raw, func(req *openai.CompletionRequest) string { return req.Model })
+		parsed, modelName, err = parseBodyWithModel(raw, func(req *openai.CompletionRequest) string { return req.Model })
 	case embeddingsEndpoint:
-		parsed, modelName, err = modelBodyParser(raw, func(req *openai.EmbeddingRequest) string { return req.Model })
+		parsed, modelName, err = parseBodyWithModel(raw, func(req *openai.EmbeddingRequest) string { return req.Model })
 	case imagesGenerationsEndpoint:
-		parsed, modelName, err = modelBodyParser(raw, func(req *openaisdk.ImageGenerateParams) string { return req.Model })
+		parsed, modelName, err = parseBodyWithModel(raw, func(req *openaisdk.ImageGenerateParams) string { return req.Model })
 	case rerankEndpoint:
-		parsed, modelName, err = modelBodyParser(raw, func(req *cohereschema.RerankV2Request) string { return req.Model })
+		parsed, modelName, err = parseBodyWithModel(raw, func(req *cohereschema.RerankV2Request) string { return req.Model })
 	case messagesEndpoint:
-		parsed, modelName, err = modelBodyParser(raw, func(req *anthropic.MessagesRequest) string { return req.GetModel() })
+		parsed, modelName, err = parseBodyWithModel(raw, func(req *anthropic.MessagesRequest) string { return req.GetModel() })
 	default:
 		e.SendLocalReply(500, nil, []byte("BUG: unsupported endpoint at body parsing: "+fmt.Sprintf("%d", f.endpoint)))
 	}
@@ -144,6 +146,8 @@ func (f *routerFilter) RequestBody(e sdk.EnvoyHTTPFilter, endOfStream bool) sdk.
 	// Store the pointer to the filter in dynamic metadata for later retrieval in the upstream filter.
 	e.SetDynamicMetadataString(internalapi.AIGatewayFilterMetadataNamespace, routerFilterPointerDynamicMetadataKey,
 		fmt.Sprintf("%d", uintptr(unsafe.Pointer(f))))
+
+	f.originalHeaders = multiValueHeadersToSingleValue(e.GetRequestHeaders())
 	return sdk.RequestBodyStatusContinue
 }
 
@@ -168,10 +172,21 @@ func (f *routerFilter) handleModelsEndpoint(e sdk.EnvoyHTTPFilter) sdk.RequestHe
 	return sdk.RequestHeadersStatusStopIteration
 }
 
-func modelBodyParser[T any](body []byte, modelExtractFn func(req *T) string) (interface{}, string, error) {
+func parseBodyWithModel[T any](body []byte, modelExtractFn func(req *T) string) (interface{}, string, error) {
 	var req T
 	if err := json.Unmarshal(body, &req); err != nil {
 		return nil, "", fmt.Errorf("failed to unmarshal body: %w", err)
 	}
 	return req, modelExtractFn(&req), nil
+}
+
+// multiValueHeadersToSingleValue converts a map of headers with multiple values to a map of headers with single values by taking the first value for each header.
+//
+// TODO: this is purely for feature parity with the old filter where we ignore the case of multiple header values.
+func multiValueHeadersToSingleValue(headers map[string][]string) map[string]string {
+	singleValueHeaders := make(map[string]string, len(headers))
+	for k, v := range headers {
+		singleValueHeaders[k] = v[0]
+	}
+	return singleValueHeaders
 }
