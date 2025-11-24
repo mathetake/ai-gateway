@@ -37,8 +37,7 @@ func (f *upstreamFilter) RequestHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.Reque
 		e.SendLocalReply(500, nil, []byte("router filter pointer not found in dynamic metadata"))
 		return sdk.RequestHeadersStatusStopIteration
 	}
-	// Parse %d string to uintptr
-	rfPtr, err := strconv.ParseUint(rfPtrStr, 10, 64)
+	rfPtr, err := strconv.ParseInt(rfPtrStr, 10, 64)
 	if err != nil {
 		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("invalid router filter pointer: %v", err)))
 		return sdk.RequestHeadersStatusStopIteration
@@ -92,6 +91,8 @@ func (f *upstreamFilter) RequestBody(e sdk.EnvoyHTTPFilter, endOfStream bool) sd
 	b := f.backend
 
 	// TODO: endpoint specific logic such as translation.
+	var newBody []byte
+	_ = newBody
 
 	if bm := b.Backend.BodyMutation; bm != nil {
 		// TODO: body mutation if needed.
@@ -100,7 +101,12 @@ func (f *upstreamFilter) RequestBody(e sdk.EnvoyHTTPFilter, endOfStream bool) sd
 
 	// Next is to do the upstream auth if needed.
 	if b.Handler != nil {
-		authHeaders, err := b.Handler.Do(context.Background(), f.reqHeaders, f.rf.originalRequestBodyRaw)
+		var originalOrNewBody []byte
+		if newBody != nil {
+			originalOrNewBody = newBody
+		}
+
+		authHeaders, err := b.Handler.Do(context.Background(), f.reqHeaders, originalOrNewBody)
 		if err != nil {
 			e.SendLocalReply(500, nil, []byte(fmt.Sprintf("failed to do backend auth: %v", err)))
 			return sdk.RequestBodyStatusStopIterationAndBuffer
