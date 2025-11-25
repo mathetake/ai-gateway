@@ -1,4 +1,4 @@
-package main
+package dynamic_module
 
 import (
 	"encoding/json"
@@ -24,41 +24,28 @@ type (
 	// This is mostly for debugging purposes, it does not do anything except
 	// setting a response header with the version of the dynamic module.
 	routerFilterConfig struct {
-		fcr    *filterConfigReceiverImpl
-		models openai.ModelList
+		fcr **filterapi.RuntimeConfig
 	}
 	// routerFilter implements [sdk.HTTPFilter].
 	routerFilter struct {
 		fc                     *filterapi.RuntimeConfig
-		models                 *openai.ModelList
 		endpoint               endpoint
 		originalHeaders        map[string]string
-		originalRequestBody    interface{}
+		originalRequestBody    any
 		originalRequestBodyRaw []byte
+		span                   any
 		attemptCount           int
 	}
 )
 
-func newRouterFilterConfig(fcr *filterConfigReceiverImpl) *routerFilterConfig {
-	config := fcr.fc
-	models := openai.ModelList{
-		Object: "list",
-		Data:   make([]openai.Model, 0, len(config.DeclaredModels)),
-	}
-	for _, m := range config.DeclaredModels {
-		models.Data = append(models.Data, openai.Model{
-			ID:      m.Name,
-			Object:  "model",
-			OwnedBy: m.OwnedBy,
-			Created: openai.JSONUNIXTime(m.CreatedAt),
-		})
-	}
-	return &routerFilterConfig{fcr: fcr, models: models}
+// NewRouterFilterConfig creates a new instance of an implementation of [sdk.HTTPFilterConfig] for the router filter.
+func NewRouterFilterConfig(fcr **filterapi.RuntimeConfig) sdk.HTTPFilterConfig {
+	return &routerFilterConfig{fcr: fcr}
 }
 
 // NewFilter implements [sdk.HTTPFilterConfig].
 func (f *routerFilterConfig) NewFilter() sdk.HTTPFilter {
-	return &routerFilter{fc: f.fcr.fc, models: &f.models}
+	return &routerFilter{fc: *f.fcr}
 }
 
 // RequestHeaders implements [sdk.HTTPFilter].
@@ -161,7 +148,21 @@ func (f *routerFilter) ResponseBody(sdk.EnvoyHTTPFilter, bool) sdk.ResponseBodyS
 //
 // This is called on request headers phase.
 func (f *routerFilter) handleModelsEndpoint(e sdk.EnvoyHTTPFilter) sdk.RequestHeadersStatus {
-	body, _ := json.Marshal(f.models)
+	config := *f.fc
+	models := openai.ModelList{
+		Object: "list",
+		Data:   make([]openai.Model, 0, len(config.DeclaredModels)),
+	}
+	for _, m := range config.DeclaredModels {
+		models.Data = append(models.Data, openai.Model{
+			ID:      m.Name,
+			Object:  "model",
+			OwnedBy: m.OwnedBy,
+			Created: openai.JSONUNIXTime(m.CreatedAt),
+		})
+	}
+
+	body, _ := json.Marshal(models)
 	e.SendLocalReply(200, [][2]string{
 		{"content-type", "application/json"},
 	}, body)

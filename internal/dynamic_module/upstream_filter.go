@@ -1,4 +1,4 @@
-package main
+package dynamic_module
 
 import (
 	"context"
@@ -6,11 +6,15 @@ import (
 	"strconv"
 	"unsafe"
 
+	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
+	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
+	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
 	"github.com/envoyproxy/ai-gateway/internal/dynamic_module/sdk"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/headermutator"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/translator"
+	openaisdk "github.com/openai/openai-go/v2"
 )
 
 type (
@@ -26,9 +30,12 @@ type (
 		// -- per endpoint processor --
 		translator any
 		metrics    any
-		span       any
 	}
 )
+
+func NewUpstreamFilterConfig() sdk.HTTPFilterConfig {
+	return &upstreamFilterConfig{}
+}
 
 // NewFilter implements [sdk.HTTPFilterConfig].
 func (f *upstreamFilterConfig) NewFilter() sdk.HTTPFilter {
@@ -66,6 +73,11 @@ func (f *upstreamFilter) RequestHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.Reque
 	f.backend = b
 	f.reqHeaders = multiValueHeadersToSingleValue(e.GetRequestHeaders())
 
+	if err := f.initializeTranslatorMetrics(b.Backend); err != nil {
+		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("failed to initialize translator: %v", err)))
+		return sdk.RequestHeadersStatusStopIteration
+	}
+
 	// Now mutate the headers based on the backend configuration.
 	if hm := b.Backend.HeaderMutation; hm != nil {
 		sets, removes := headermutator.NewHeaderMutator(b.Backend.HeaderMutation, f.rf.originalHeaders).Mutate(f.reqHeaders, f.onRetry)
@@ -96,9 +108,28 @@ func (f *upstreamFilter) RequestBody(e sdk.EnvoyHTTPFilter, endOfStream bool) sd
 
 	b := f.backend
 
-	newHeaders, newBody, err := f.endpointProcessor.TranslateRequestBody()
+	var newHeaders []internalapi.Header
+	var newBody []byte
+	var err error
+	switch t := f.translator.(type) {
+	case translator.OpenAIChatCompletionTranslator:
+		newHeaders, newBody, err = t.RequestBody(f.rf.originalRequestBodyRaw, f.rf.originalRequestBody.(*openai.ChatCompletionRequest), f.onRetry)
+	case translator.OpenAICompletionTranslator:
+		newHeaders, newBody, err = t.RequestBody(f.rf.originalRequestBodyRaw, f.rf.originalRequestBody.(*openai.CompletionRequest), f.onRetry)
+	case translator.OpenAIEmbeddingTranslator:
+		newHeaders, newBody, err = t.RequestBody(f.rf.originalRequestBodyRaw, f.rf.originalRequestBody.(*openai.EmbeddingRequest), f.onRetry)
+	case translator.AnthropicMessagesTranslator:
+		newHeaders, newBody, err = t.RequestBody(f.rf.originalRequestBodyRaw, f.rf.originalRequestBody.(*anthropic.MessagesRequest), f.onRetry)
+	case translator.OpenAIImageGenerationTranslator:
+		newHeaders, newBody, err = t.RequestBody(f.rf.originalRequestBodyRaw, f.rf.originalRequestBody.(*openaisdk.ImageGenerateParams), f.onRetry)
+	case translator.CohereRerankTranslator:
+		newHeaders, newBody, err = t.RequestBody(f.rf.originalRequestBodyRaw, f.rf.originalRequestBody.(*cohereschema.RerankV2Request), f.onRetry)
+	default:
+		e.SendLocalReply(500, nil, []byte("BUG: unsupported translator type"))
+		return sdk.RequestBodyStatusStopIterationAndBuffer
+	}
 	if err != nil {
-		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("failed to process upstream endpoint: %v", err)))
+		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("failed to translate request body: %v", err)))
 		return sdk.RequestBodyStatusStopIterationAndBuffer
 	}
 	for _, h := range newHeaders {
@@ -155,7 +186,7 @@ func (f *upstreamFilter) ResponseBody(sdk.EnvoyHTTPFilter, bool) sdk.ResponseBod
 	return sdk.ResponseBodyStatusContinue
 }
 
-func (f *upstreamFilter) initializeTranslator(b *filterapi.Backend) error {
+func (f *upstreamFilter) initializeTranslatorMetrics(b *filterapi.Backend) error {
 	out := b.Schema
 	modelNameOverride := b.ModelNameOverride
 	switch f.rf.endpoint {
@@ -198,8 +229,21 @@ func (f *upstreamFilter) initializeTranslator(b *filterapi.Backend) error {
 			return fmt.Errorf("unsupported API schema: backend=%s", out)
 		}
 	case rerankEndpoint:
+		switch out.Name {
+		case filterapi.APISchemaCohere:
+			f.translator = translator.NewRerankCohereToCohereTranslator(out.Version, modelNameOverride)
+		default:
+			return fmt.Errorf("unsupported API schema: backend=%s", out)
+		}
 	case messagesEndpoint:
+		switch out.Name {
+		case filterapi.APISchemaAnthropic:
+			f.translator = translator.NewAnthropicToAnthropicTranslator(out.Version, modelNameOverride)
+		default:
+			return fmt.Errorf("unsupported API schema: backend=%s", out)
+		}
 	default:
 		return fmt.Errorf("unsupported endpoint for per-route upstream filter: %v", f.rf.endpoint)
 	}
+	return nil
 }
