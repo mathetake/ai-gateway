@@ -66,13 +66,9 @@ type EnvoyHTTPFilter interface {
 }
 
 type BodyReader interface {
-	LengthGetter
-	io.Reader
-}
-
-type LengthGetter interface {
 	// Len returns the length of the body in bytes, regardless of how much has been read.
 	Len() int
+	io.Reader
 }
 
 // HTTPFilter is an interface that represents each Http request.

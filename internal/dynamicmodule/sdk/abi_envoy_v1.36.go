@@ -409,7 +409,7 @@ func (b *bodyReader) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
-// Len implements [LengthGetter].
+// Len implements [BodyReader].
 //
 // This returns the length of the body in bytes, regardless of how much has been read.
 func (b *bodyReader) Len() int {
