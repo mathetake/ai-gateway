@@ -51,7 +51,7 @@ func (f *upstreamFilter) RequestHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.Reque
 		e.SendLocalReply(500, nil, []byte("backend name not found in upstream host metadata"))
 		return sdk.RequestHeadersStatusStopIteration
 	}
-	b, ok := f.rf.filterConfig().Backends[backend]
+	b, ok := f.rf.fc.Backends[backend]
 	if !ok {
 		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("backend %s not found in filter config", backend)))
 		return sdk.RequestHeadersStatusStopIteration

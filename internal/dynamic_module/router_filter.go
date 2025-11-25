@@ -29,7 +29,8 @@ type (
 	}
 	// routerFilter implements [sdk.HTTPFilter].
 	routerFilter struct {
-		fc                     *routerFilterConfig
+		fc                     *filterapi.RuntimeConfig
+		models                 *openai.ModelList
 		endpoint               endpoint
 		originalHeaders        map[string]string
 		originalRequestBody    interface{}
@@ -57,12 +58,7 @@ func newRouterFilterConfig(fcr *filterConfigReceiverImpl) *routerFilterConfig {
 
 // NewFilter implements [sdk.HTTPFilterConfig].
 func (f *routerFilterConfig) NewFilter() sdk.HTTPFilter {
-	return &routerFilter{fc: f}
-}
-
-// filterConfig is a helper that returns the filter config for the current stream.
-func (f *routerFilter) filterConfig() *filterapi.RuntimeConfig {
-	return f.fc.fcr.fc
+	return &routerFilter{fc: f.fcr.fc, models: &f.models}
 }
 
 // RequestHeaders implements [sdk.HTTPFilter].
@@ -165,7 +161,7 @@ func (f *routerFilter) ResponseBody(sdk.EnvoyHTTPFilter, bool) sdk.ResponseBodyS
 //
 // This is called on request headers phase.
 func (f *routerFilter) handleModelsEndpoint(e sdk.EnvoyHTTPFilter) sdk.RequestHeadersStatus {
-	body, _ := json.Marshal(f.fc.models)
+	body, _ := json.Marshal(f.models)
 	e.SendLocalReply(200, [][2]string{
 		{"content-type", "application/json"},
 	}, body)
