@@ -10,6 +10,7 @@ import (
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/headermutator"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
+	"github.com/envoyproxy/ai-gateway/internal/translator"
 )
 
 type (
@@ -21,6 +22,11 @@ type (
 		backend    *filterapi.RuntimeBackend
 		reqHeaders map[string]string
 		onRetry    bool
+
+		// -- per endpoint processor --
+		translator any
+		metrics    any
+		span       any
 	}
 )
 
@@ -90,13 +96,31 @@ func (f *upstreamFilter) RequestBody(e sdk.EnvoyHTTPFilter, endOfStream bool) sd
 
 	b := f.backend
 
-	// TODO: endpoint specific logic such as translation.
-	var newBody []byte
-	_ = newBody
+	newHeaders, newBody, err := f.endpointProcessor.TranslateRequestBody()
+	if err != nil {
+		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("failed to process upstream endpoint: %v", err)))
+		return sdk.RequestBodyStatusStopIterationAndBuffer
+	}
+	for _, h := range newHeaders {
+		if !e.SetRequestHeader(h.Key(), []byte(h.Value())) {
+			e.SendLocalReply(500, nil, []byte(fmt.Sprintf("failed to set mutated header %s", h.Key())))
+			return sdk.RequestBodyStatusStopIterationAndBuffer
+		}
+	}
 
 	if bm := b.Backend.BodyMutation; bm != nil {
 		// TODO: body mutation if needed.
 		_ = bm
+	}
+
+	if newBody != nil {
+		cur, ok := e.GetRequestBody()
+		if !ok {
+			e.SendLocalReply(500, nil, []byte("failed to get request body for upstream mutation"))
+			return sdk.RequestBodyStatusStopIterationAndBuffer
+		}
+		_ = e.DrainResponseBody(cur.Len())
+		_ = e.AppendRequestBody(newBody)
 	}
 
 	// Next is to do the upstream auth if needed.
@@ -129,4 +153,45 @@ func (f *upstreamFilter) ResponseHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.Resp
 // ResponseBody implements [sdk.HTTPFilter].
 func (f *upstreamFilter) ResponseBody(sdk.EnvoyHTTPFilter, bool) sdk.ResponseBodyStatus {
 	return sdk.ResponseBodyStatusContinue
+}
+
+func (f *upstreamFilter) initializeTranslator(b *filterapi.Backend) error {
+	out := b.Schema
+	modelNameOverride := b.ModelNameOverride
+	switch f.rf.endpoint {
+	case chatCompletionsEndpoint:
+		switch out.Name {
+		case filterapi.APISchemaOpenAI:
+			f.translator = translator.NewChatCompletionOpenAIToOpenAITranslator(out.Version, modelNameOverride)
+		case filterapi.APISchemaAWSBedrock:
+			f.translator = translator.NewChatCompletionOpenAIToAWSBedrockTranslator(modelNameOverride)
+		case filterapi.APISchemaAzureOpenAI:
+			f.translator = translator.NewChatCompletionOpenAIToAzureOpenAITranslator(out.Version, modelNameOverride)
+		case filterapi.APISchemaGCPVertexAI:
+			f.translator = translator.NewChatCompletionOpenAIToGCPVertexAITranslator(modelNameOverride)
+		case filterapi.APISchemaGCPAnthropic:
+			f.translator = translator.NewChatCompletionOpenAIToGCPAnthropicTranslator(out.Version, modelNameOverride)
+		default:
+			return fmt.Errorf("unsupported API schema: backend=%s", out)
+		}
+	case completionsEndpoint:
+		switch out.Name {
+		case filterapi.APISchemaOpenAI:
+			f.translator = translator.NewChatCompletionOpenAIToOpenAITranslator(out.Version, modelNameOverride)
+		default:
+			return fmt.Errorf("unsupported API schema: backend=%s", out)
+		}
+	case embeddingsEndpoint:
+		switch out.Name {
+		case filterapi.APISchemaOpenAI:
+			f.translator = translator.NewEmbeddingOpenAIToOpenAITranslator(out.Version, modelNameOverride, nil)
+		default:
+			return fmt.Errorf("unsupported API schema: backend=%s", out)
+		}
+	case imagesGenerationsEndpoint:
+	case rerankEndpoint:
+	case messagesEndpoint:
+	default:
+		return fmt.Errorf("unsupported endpoint for per-route upstream filter: %v", f.rf.endpoint)
+	}
 }

@@ -39,13 +39,13 @@ type EnvoyHTTPFilter interface {
 	// SetResponseHeader sets the response header. Returns true if the header is set successfully.
 	SetResponseHeader(key string, value []byte) bool
 	// GetRequestBody gets the request body. Returns the io.Reader and true if the body is found.
-	GetRequestBody() (io.Reader, bool)
+	GetRequestBody() (BodyReader, bool)
 	// DrainRequestBody drains n bytes from the request body. This will invalidate the io.Reader returned by GetRequestBody before this is called.
 	DrainRequestBody(n int) bool
 	// AppendRequestBody appends the data to the request body. This will invalidate the io.Reader returned by GetRequestBody before this is called.
 	AppendRequestBody(data []byte) bool
 	// GetResponseBody gets the response body. Returns the io.Reader and true if the body is found.
-	GetResponseBody() (io.Reader, bool)
+	GetResponseBody() (BodyReader, bool)
 	// DrainResponseBody drains n bytes from the response body. This will invalidate the io.Reader returned by GetResponseBody before this is called.
 	DrainResponseBody(n int) bool
 	// AppendResponseBody appends the data to the response body. This will invalidate the io.Reader returned by GetResponseBody before this is called.
@@ -58,6 +58,16 @@ type EnvoyHTTPFilter interface {
 	GetUpstreamHostMetadataString(namespace string, key string) (string, bool)
 	// SetDynamicMetadataString sets the dynamic metadata value for the given namespace and key. Returns true if the value is set successfully.
 	SetDynamicMetadataString(namespace string, key string, value string) bool
+}
+
+type BodyReader interface {
+	LengthGetter
+	io.Reader
+}
+
+type LengthGetter interface {
+	// Len returns the length of the body in bytes, regardless of how much has been read.
+	Len() int
 }
 
 // HTTPFilter is an interface that represents each Http request.

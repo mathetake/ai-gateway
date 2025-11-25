@@ -396,6 +396,17 @@ func (b *bodyReader) Read(p []byte) (n int, err error) {
 	return n, nil
 }
 
+// Len implements [LengthGetter].
+//
+// This returns the length of the body in bytes, regardless of how much has been read.
+func (b *bodyReader) Len() int {
+	total := 0
+	for _, chunk := range b.chunks {
+		total += int(chunk.length)
+	}
+	return total
+}
+
 type envoySlice struct {
 	data   uintptr
 	length C.size_t
@@ -488,7 +499,7 @@ func (e envoyFilter) DrainRequestBody(n int) bool {
 }
 
 // GetRequestBody implements [EnvoyHTTPFilter].
-func (e envoyFilter) GetRequestBody() (io.Reader, bool) {
+func (e envoyFilter) GetRequestBody() (BodyReader, bool) {
 	var vectorSize int
 	ret := C.envoy_dynamic_module_callback_http_get_request_body_vector_size(
 		C.uintptr_t(e.raw),
@@ -531,7 +542,7 @@ func (e envoyFilter) DrainResponseBody(n int) bool {
 }
 
 // GetResponseBody implements [EnvoyHTTPFilter].
-func (e envoyFilter) GetResponseBody() (io.Reader, bool) {
+func (e envoyFilter) GetResponseBody() (BodyReader, bool) {
 	var vectorSize int
 	ret := C.envoy_dynamic_module_callback_http_get_response_body_vector_size(
 		C.uintptr_t(e.raw),
