@@ -184,11 +184,19 @@ func (f *upstreamFilter) initializeTranslator(b *filterapi.Backend) error {
 	case embeddingsEndpoint:
 		switch out.Name {
 		case filterapi.APISchemaOpenAI:
-			f.translator = translator.NewEmbeddingOpenAIToOpenAITranslator(out.Version, modelNameOverride, nil)
+			f.translator = translator.NewEmbeddingOpenAIToOpenAITranslator(out.Version, modelNameOverride)
+		case filterapi.APISchemaAzureOpenAI:
+			f.translator = translator.NewEmbeddingOpenAIToAzureOpenAITranslator(out.Version, modelNameOverride)
 		default:
 			return fmt.Errorf("unsupported API schema: backend=%s", out)
 		}
 	case imagesGenerationsEndpoint:
+		switch out.Name {
+		case filterapi.APISchemaOpenAI:
+			f.translator = translator.NewImageGenerationOpenAIToOpenAITranslator(out.Version, modelNameOverride)
+		default:
+			return fmt.Errorf("unsupported API schema: backend=%s", out)
+		}
 	case rerankEndpoint:
 	case messagesEndpoint:
 	default:
