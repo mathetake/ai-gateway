@@ -37,13 +37,13 @@ func init() {
 	sdk.NewHTTPFilterConfig = g.newHTTPFilterConfig
 }
 
-// filterConfigReceiverImpl implements [filterapi.ConfigReceiver] to load filter configuration.
+// globalState implements [filterapi.ConfigReceiver] to load filter configuration.
 type globalState struct {
 	fc  *filterapi.RuntimeConfig
 	env *dynamic_module.Env
 }
 
-// newHTTPFilter creates a new http filter based on the config.
+// newHTTPFilterConfig creates a new http filter based on the config.
 //
 // `config` is the configuration string that is specified in the Envoy configuration.
 func (g *globalState) newHTTPFilterConfig(name string, _ []byte) sdk.HTTPFilterConfig {
