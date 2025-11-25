@@ -39,7 +39,7 @@ type (
 )
 
 // NewRouterFilterConfig creates a new instance of an implementation of [sdk.HTTPFilterConfig] for the router filter.
-func NewRouterFilterConfig(fcr **filterapi.RuntimeConfig) sdk.HTTPFilterConfig {
+func NewRouterFilterConfig(env *Env, fcr **filterapi.RuntimeConfig) sdk.HTTPFilterConfig {
 	return &routerFilterConfig{fcr: fcr}
 }
 

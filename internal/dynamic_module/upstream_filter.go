@@ -33,7 +33,7 @@ type (
 	}
 )
 
-func NewUpstreamFilterConfig() sdk.HTTPFilterConfig {
+func NewUpstreamFilterConfig(env *Env) sdk.HTTPFilterConfig {
 	return &upstreamFilterConfig{}
 }
 
