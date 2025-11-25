@@ -1,4 +1,9 @@
-package dynamic_module
+// Copyright Envoy AI Gateway Authors
+// SPDX-License-Identifier: Apache-2.0
+// The full text of the Apache license is available in the LICENSE file at
+// the root of the repo.
+
+package dynamicmodule
 
 import (
 	"context"
@@ -6,15 +11,16 @@ import (
 	"strconv"
 	"unsafe"
 
+	openaisdk "github.com/openai/openai-go/v2"
+
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
-	"github.com/envoyproxy/ai-gateway/internal/dynamic_module/sdk"
+	"github.com/envoyproxy/ai-gateway/internal/dynamicmodule/sdk"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/headermutator"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/translator"
-	openaisdk "github.com/openai/openai-go/v2"
 )
 
 type (
@@ -34,6 +40,7 @@ type (
 )
 
 func NewUpstreamFilterConfig(env *Env) sdk.HTTPFilterConfig {
+	_ = env // TODO
 	return &upstreamFilterConfig{}
 }
 
@@ -44,6 +51,7 @@ func (f *upstreamFilterConfig) NewFilter() sdk.HTTPFilter {
 
 // RequestHeaders implements [sdk.HTTPFilter].
 func (f *upstreamFilter) RequestHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.RequestHeadersStatus {
+	_ = f.metrics // TODO
 	rfPtrStr, ok := e.GetDynamicMetadataString(internalapi.AIGatewayFilterMetadataNamespace,
 		routerFilterPointerDynamicMetadataKey)
 	if !ok {
@@ -55,7 +63,7 @@ func (f *upstreamFilter) RequestHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.Reque
 		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("invalid router filter pointer: %v", err)))
 		return sdk.RequestHeadersStatusStopIteration
 	}
-	f.rf = (*routerFilter)(unsafe.Pointer(uintptr(rfPtr)))
+	f.rf = (*routerFilter)(unsafe.Pointer(uintptr(rfPtr))) // nolint:govet
 	f.rf.attemptCount++
 	f.onRetry = f.rf.attemptCount > 1
 
@@ -64,7 +72,7 @@ func (f *upstreamFilter) RequestHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.Reque
 		e.SendLocalReply(500, nil, []byte("backend name not found in upstream host metadata"))
 		return sdk.RequestHeadersStatusStopIteration
 	}
-	b, ok := f.rf.fc.Backends[backend]
+	b, ok := f.rf.runtimeFilterConfig.Backends[backend]
 	if !ok {
 		e.SendLocalReply(500, nil, []byte(fmt.Sprintf("backend %s not found in filter config", backend)))
 		return sdk.RequestHeadersStatusStopIteration
@@ -178,6 +186,7 @@ func (f *upstreamFilter) RequestBody(e sdk.EnvoyHTTPFilter, endOfStream bool) sd
 
 // ResponseHeaders implements [sdk.HTTPFilter].
 func (f *upstreamFilter) ResponseHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.ResponseHeadersStatus {
+	_ = e
 	return sdk.ResponseHeadersStatusContinue
 }
 

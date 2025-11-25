@@ -1,3 +1,8 @@
+// Copyright Envoy AI Gateway Authors
+// SPDX-License-Identifier: Apache-2.0
+// The full text of the Apache license is available in the LICENSE file at
+// the root of the repo.
+
 package main
 
 import (
@@ -7,14 +12,15 @@ import (
 	"os"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
+
 	"github.com/envoyproxy/ai-gateway/internal/backendauth"
-	"github.com/envoyproxy/ai-gateway/internal/dynamic_module"
-	"github.com/envoyproxy/ai-gateway/internal/dynamic_module/sdk"
+	"github.com/envoyproxy/ai-gateway/internal/dynamicmodule"
+	"github.com/envoyproxy/ai-gateway/internal/dynamicmodule/sdk"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
 	"github.com/envoyproxy/ai-gateway/internal/metrics"
-	"github.com/prometheus/client_golang/prometheus"
-	otelprom "go.opentelemetry.io/otel/exporters/prometheus"
 )
 
 func main() {} // This must be present to make a shared library.
@@ -31,7 +37,7 @@ func init() {
 		Level: slog.LevelDebug, // Adjust log level from environment variable if needed.
 	}))
 	if err := filterapi.StartConfigWatcher(context.Background(),
-		os.Getenv("AI_GATEWAY_DYNAMIC_MODULE_FILTER_CONFIG_PATH"), g, logger, time.Second*5); err != nil {
+		os.Getenv("AI_GATEWAY_dynamicmodule_FILTER_CONFIG_PATH"), g, logger, time.Second*5); err != nil {
 		panic("failed to start filter config watcher: " + err.Error())
 	}
 	sdk.NewHTTPFilterConfig = g.newHTTPFilterConfig
@@ -40,7 +46,7 @@ func init() {
 // globalState implements [filterapi.ConfigReceiver] to load filter configuration.
 type globalState struct {
 	fc  *filterapi.RuntimeConfig
-	env *dynamic_module.Env
+	env *dynamicmodule.Env
 }
 
 // newHTTPFilterConfig creates a new http filter based on the config.
@@ -49,9 +55,9 @@ type globalState struct {
 func (g *globalState) newHTTPFilterConfig(name string, _ []byte) sdk.HTTPFilterConfig {
 	switch name {
 	case "ai_gateway.router":
-		return dynamic_module.NewRouterFilterConfig(g.env, &g.fc)
+		return dynamicmodule.NewRouterFilterConfig(g.env, &g.fc)
 	case "ai_gateway.upstream":
-		return dynamic_module.NewUpstreamFilterConfig(g.env)
+		return dynamicmodule.NewUpstreamFilterConfig(g.env)
 	default:
 		panic("unknown filter: " + name)
 	}
@@ -81,21 +87,21 @@ func (g *globalState) initializeEnv() error {
 	}
 
 	endpointPrefixes, err := internalapi.ParseEndpointPrefixes(os.Getenv(
-		"AI_GATEWAY_DYNAMIC_MODULE_FILTER_ENDPOINT_PREFIXES",
+		"AI_GATEWAY_dynamicmodule_FILTER_ENDPOINT_PREFIXES",
 	))
 	if err != nil {
 		return fmt.Errorf("failed to parse endpoint prefixes: %w", err)
 	}
 
 	metricsRequestHeaderAttributes, err := internalapi.ParseRequestHeaderAttributeMapping(os.Getenv(
-		"AI_GATEWAY_DYNAMIC_MODULE_FILTER_METRICS_REQUEST_HEADER_ATTRIBUTES",
+		"AI_GATEWAY_dynamicmodule_FILTER_METRICS_REQUEST_HEADER_ATTRIBUTES",
 	))
 	if err != nil {
 		return fmt.Errorf("failed to parse metrics header mapping: %w", err)
 	}
 
-	g.env = &dynamic_module.Env{
-		RootPrefix:                    os.Getenv("AI_GATEWAY_DYNAMIC_MODULE_ROOT_PREFIX"),
+	g.env = &dynamicmodule.Env{
+		RootPrefix:                    os.Getenv("AI_GATEWAY_dynamicmodule_ROOT_PREFIX"),
 		EndpointPrefixes:              endpointPrefixes,
 		ChatCompletionMetricsFactory:  metrics.NewChatCompletionFactory(meter, metricsRequestHeaderAttributes),
 		MessagesMetricsFactory:        metrics.NewMessagesFactory(meter, metricsRequestHeaderAttributes),

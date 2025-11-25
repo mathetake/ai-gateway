@@ -1,19 +1,26 @@
-package dynamic_module
+// Copyright Envoy AI Gateway Authors
+// SPDX-License-Identifier: Apache-2.0
+// The full text of the Apache license is available in the LICENSE file at
+// the root of the repo.
+
+package dynamicmodule
 
 import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"unsafe"
+
+	openaisdk "github.com/openai/openai-go/v2"
 
 	"github.com/envoyproxy/ai-gateway/internal/apischema/anthropic"
 	cohereschema "github.com/envoyproxy/ai-gateway/internal/apischema/cohere"
 	"github.com/envoyproxy/ai-gateway/internal/apischema/openai"
-	"github.com/envoyproxy/ai-gateway/internal/dynamic_module/sdk"
+	"github.com/envoyproxy/ai-gateway/internal/dynamicmodule/sdk"
 	"github.com/envoyproxy/ai-gateway/internal/filterapi"
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
-	openaisdk "github.com/openai/openai-go/v2"
 )
 
 const routerFilterPointerDynamicMetadataKey = "router_filter_pointer"
@@ -24,11 +31,13 @@ type (
 	// This is mostly for debugging purposes, it does not do anything except
 	// setting a response header with the version of the dynamic module.
 	routerFilterConfig struct {
-		fcr **filterapi.RuntimeConfig
+		fcr              **filterapi.RuntimeConfig
+		prefixToEndpoint map[string]endpoint
 	}
 	// routerFilter implements [sdk.HTTPFilter].
 	routerFilter struct {
-		fc                     *filterapi.RuntimeConfig
+		routerFilterConfig     *routerFilterConfig
+		runtimeFilterConfig    *filterapi.RuntimeConfig
 		endpoint               endpoint
 		originalHeaders        map[string]string
 		originalRequestBody    any
@@ -40,12 +49,24 @@ type (
 
 // NewRouterFilterConfig creates a new instance of an implementation of [sdk.HTTPFilterConfig] for the router filter.
 func NewRouterFilterConfig(env *Env, fcr **filterapi.RuntimeConfig) sdk.HTTPFilterConfig {
-	return &routerFilterConfig{fcr: fcr}
+	prefixToEndpoint := map[string]endpoint{
+		path.Join(env.RootPrefix, env.EndpointPrefixes.OpenAI, "/v1/chat/completions"):   chatCompletionsEndpoint,
+		path.Join(env.RootPrefix, env.EndpointPrefixes.OpenAI, "/v1/completions"):        completionsEndpoint,
+		path.Join(env.RootPrefix, env.EndpointPrefixes.OpenAI, "/v1/embeddings"):         embeddingsEndpoint,
+		path.Join(env.RootPrefix, env.EndpointPrefixes.OpenAI, "/v1/images/generations"): imagesGenerationsEndpoint,
+		path.Join(env.RootPrefix, env.EndpointPrefixes.Cohere, "/v2/rerank"):             rerankEndpoint,
+		path.Join(env.RootPrefix, env.EndpointPrefixes.OpenAI, "/v1/models"):             modelsEndpoint,
+		path.Join(env.RootPrefix, env.EndpointPrefixes.Anthropic, "/v1/messages"):        messagesEndpoint,
+	}
+	return &routerFilterConfig{
+		fcr:              fcr,
+		prefixToEndpoint: prefixToEndpoint,
+	}
 }
 
 // NewFilter implements [sdk.HTTPFilterConfig].
 func (f *routerFilterConfig) NewFilter() sdk.HTTPFilter {
-	return &routerFilter{fc: *f.fcr}
+	return &routerFilter{routerFilterConfig: f, runtimeFilterConfig: *f.fcr}
 }
 
 // RequestHeaders implements [sdk.HTTPFilter].
@@ -55,32 +76,16 @@ func (f *routerFilter) RequestHeaders(e sdk.EnvoyHTTPFilter, _ bool) sdk.Request
 	if queryIndex := strings.Index(p, "?"); queryIndex != -1 {
 		p = p[:queryIndex]
 	}
-	// TODO: prefix config.
-	switch p {
-	case "/v1/chat/completions":
-		f.endpoint = chatCompletionsEndpoint
-		return sdk.RequestHeadersStatusContinue
-	case "/v1/completions":
-		f.endpoint = completionsEndpoint
-		return sdk.RequestHeadersStatusContinue
-	case "/v1/embeddings":
-		f.endpoint = embeddingsEndpoint
-		return sdk.RequestHeadersStatusContinue
-	case "/v1/images/generations":
-		f.endpoint = imagesGenerationsEndpoint
-		return sdk.RequestHeadersStatusContinue
-	case "/cohere/v2/rerank":
-		f.endpoint = rerankEndpoint
-		return sdk.RequestHeadersStatusContinue
-	case "/anthropic/v1/messages":
-		f.endpoint = messagesEndpoint
-		return sdk.RequestHeadersStatusContinue
-	case "/v1/models":
-		return f.handleModelsEndpoint(e)
-	default:
+	ep, ok := f.routerFilterConfig.prefixToEndpoint[p]
+	if !ok {
 		e.SendLocalReply(404, nil, []byte(fmt.Sprintf("unsupported path: %s", p)))
 		return sdk.RequestHeadersStatusStopIteration
 	}
+	f.endpoint = ep
+	if f.endpoint == modelsEndpoint {
+		return f.handleModelsEndpoint(e)
+	}
+	return sdk.RequestHeadersStatusContinue
 }
 
 // RequestBody implements [sdk.HTTPFilter].
@@ -148,7 +153,7 @@ func (f *routerFilter) ResponseBody(sdk.EnvoyHTTPFilter, bool) sdk.ResponseBodyS
 //
 // This is called on request headers phase.
 func (f *routerFilter) handleModelsEndpoint(e sdk.EnvoyHTTPFilter) sdk.RequestHeadersStatus {
-	config := *f.fc
+	config := f.runtimeFilterConfig
 	models := openai.ModelList{
 		Object: "list",
 		Data:   make([]openai.Model, 0, len(config.DeclaredModels)),

@@ -1,4 +1,9 @@
-package dynamic_module
+// Copyright Envoy AI Gateway Authors
+// SPDX-License-Identifier: Apache-2.0
+// The full text of the Apache license is available in the LICENSE file at
+// the root of the repo.
+
+package dynamicmodule
 
 import (
 	"github.com/envoyproxy/ai-gateway/internal/internalapi"
@@ -21,6 +26,8 @@ const (
 	rerankEndpoint
 	// messagesEndpoint represents the /v1/messages endpoint of anthropic.
 	messagesEndpoint
+	// modelsEndpoint represents the /v1/models endpoint.
+	modelsEndpoint
 )
 
 // Env holds the environment configuration for the dynamic module that is process-wide.

@@ -1,4 +1,7 @@
-//go:build envoy_v1.36
+// Copyright Envoy AI Gateway Authors
+// SPDX-License-Identifier: Apache-2.0
+// The full text of the Apache license is available in the LICENSE file at
+// the root of the repo.
 
 package sdk
 
@@ -175,7 +178,7 @@ func envoy_dynamic_module_on_http_filter_config_new(
 
 //export envoy_dynamic_module_on_http_filter_config_destroy
 func envoy_dynamic_module_on_http_filter_config_destroy(ptr uintptr) {
-	pinnedFilterConfig := unwrapPinnedHTTPFilterConfig(uintptr(ptr))
+	pinnedFilterConfig := unwrapPinnedHTTPFilterConfig(ptr)
 	memManager.unpinHTTPFilterConfig(pinnedFilterConfig)
 }
 
@@ -184,7 +187,7 @@ func envoy_dynamic_module_on_http_filter_new(
 	filterConfigPtr uintptr,
 	_ uintptr,
 ) uintptr {
-	pinnedFilterConfig := unwrapPinnedHTTPFilterConfig(uintptr(filterConfigPtr))
+	pinnedFilterConfig := unwrapPinnedHTTPFilterConfig(filterConfigPtr)
 	filterConfig := pinnedFilterConfig.obj
 	filter := filterConfig.NewFilter()
 	if filter == nil {
@@ -200,7 +203,7 @@ func envoy_dynamic_module_on_http_filter_new(
 func envoy_dynamic_module_on_http_filter_destroy(
 	filterPtr uintptr,
 ) {
-	pinned := unwrapPinnedHTTPFilter(uintptr(filterPtr))
+	pinned := unwrapPinnedHTTPFilter(filterPtr)
 	// Unpin the filter from the memory manager.
 	memManager.unpinHTTPFilter(pinned)
 }
@@ -211,8 +214,8 @@ func envoy_dynamic_module_on_http_filter_request_headers(
 	filterModulePtr uintptr,
 	endOfStream bool,
 ) uintptr {
-	pinned := unwrapPinnedHTTPFilter(uintptr(filterModulePtr))
-	status := pinned.obj.RequestHeaders(envoyFilter{raw: filterEnvoyPtr}, bool(endOfStream))
+	pinned := unwrapPinnedHTTPFilter(filterModulePtr)
+	status := pinned.obj.RequestHeaders(envoyFilter{raw: filterEnvoyPtr}, endOfStream)
 	return uintptr(status)
 }
 
@@ -222,8 +225,8 @@ func envoy_dynamic_module_on_http_filter_request_body(
 	filterModulePtr uintptr,
 	endOfStream bool,
 ) uintptr {
-	pinned := unwrapPinnedHTTPFilter(uintptr(filterModulePtr))
-	status := pinned.obj.RequestBody(envoyFilter{raw: uintptr(filterEnvoyPtr)}, bool(endOfStream))
+	pinned := unwrapPinnedHTTPFilter(filterModulePtr)
+	status := pinned.obj.RequestBody(envoyFilter{raw: filterEnvoyPtr}, endOfStream)
 	return uintptr(status)
 }
 
@@ -238,8 +241,8 @@ func envoy_dynamic_module_on_http_filter_response_headers(
 	filterModulePtr uintptr,
 	endOfStream bool,
 ) uintptr {
-	pinned := unwrapPinnedHTTPFilter(uintptr(filterModulePtr))
-	status := pinned.obj.ResponseHeaders(envoyFilter{raw: uintptr(filterEnvoyPtr)}, bool(endOfStream))
+	pinned := unwrapPinnedHTTPFilter(filterModulePtr)
+	status := pinned.obj.ResponseHeaders(envoyFilter{raw: filterEnvoyPtr}, endOfStream)
 	return uintptr(status)
 }
 
@@ -249,8 +252,8 @@ func envoy_dynamic_module_on_http_filter_response_body(
 	filterModulePtr uintptr,
 	endOfStream bool,
 ) uintptr {
-	pinned := unwrapPinnedHTTPFilter(uintptr(filterModulePtr))
-	status := pinned.obj.ResponseBody(envoyFilter{raw: uintptr(filterEnvoyPtr)}, bool(endOfStream))
+	pinned := unwrapPinnedHTTPFilter(filterModulePtr)
+	status := pinned.obj.ResponseBody(envoyFilter{raw: filterEnvoyPtr}, endOfStream)
 	return uintptr(status)
 }
 
@@ -274,7 +277,14 @@ func envoy_dynamic_module_on_http_filter_http_callout_done(
 	bodyVectorPtr uintptr,
 	bodyVectorSize C.size_t,
 ) {
-	panic("TODO")
+	_ = filterEnvoyPtr
+	_ = filterModulePtr
+	_ = calloutID
+	_ = result
+	_ = headersPtr
+	_ = headersSize
+	_ = bodyVectorPtr
+	_ = bodyVectorSize
 }
 
 //export envoy_dynamic_module_on_http_filter_scheduled
@@ -283,6 +293,9 @@ func envoy_dynamic_module_on_http_filter_scheduled(
 	filterModulePtr uintptr,
 	eventID C.uint64_t,
 ) {
+	_ = filterEnvoyPtr
+	_ = filterModulePtr
+	_ = eventID
 }
 
 // GetRequestHeader implements [EnvoyHTTPFilter].
